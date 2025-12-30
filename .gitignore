@@ -136,3 +136,7 @@ foldseek/assets/DB/cath_ssg5_fs_db_h
 foldseek/assets/DB/cath_ssg5_fs_db_h.index
 foldseek/assets/DB/cath_ssg5_fs_db_ss
 foldseek/assets/DB/cath_ssg5_fs_db_ss.index
+
+# misc
+assets/
+.claude/
