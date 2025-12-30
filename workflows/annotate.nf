@@ -142,7 +142,6 @@ def validateParameters() {
     Results dir         : ${params.results_dir}
     Debug mode          : ${params.debug}
     Test mode           : ${params.test_mode ?: false}
-    Streaming chunks    : ${params.streaming_chunks ?: false}
     ==============================================
     """.stripIndent()
     )
@@ -169,8 +168,6 @@ workflow {
         log.info("Using direct directory mode: reading PDB files from ${params.pdb_directory}")
 
         // Stream PDB files directly from directory using glob pattern
-        // This avoids loading all paths into memory
-        // Pattern matches both files in root directory and in any subdirectories
         def pdb_pattern = "${params.pdb_directory}/{*.pdb,**/*.pdb}"
         log.info("Searching for PDB files with pattern: ${pdb_pattern}")
 
@@ -251,22 +248,6 @@ workflow {
     // PHASE 2: Domain Prediction
     // =========================================
 
-    // Chunking strategy based on streaming_chunks parameter
-    if (params.streaming_chunks) {
-        // STREAMING MODE: Process chunks as they arrive (no sorting, no waiting for all files)
-        // More memory-efficient for large datasets, but less deterministic caching
-        log.info("Using streaming chunking mode for GPU processing (heavy_chunk_size=${params.heavy_chunk_size})")
-
-        heavy_chunk_ch = filtered_pdb_ch
-            .flatten()
-            .buffer(size: params.heavy_chunk_size as int, remainder: true)
-
-    } else {
-        // DETERMINISTIC MODE: Sort all files before chunking (original behavior)
-        // Better for caching but requires collecting all files in memory first
-        // WARNING: This mode is NOT recommended for datasets >1M structures
-        log.info("Using deterministic chunking mode (may consume significant memory)")
-
         heavy_chunk_ch = filtered_pdb_ch
             .flatten()
             .toSortedList { it.toString() } // sort PDB paths deterministically
@@ -278,7 +259,6 @@ workflow {
                     chunks << allFiles.subList(i, end)
                 }
                 return chunks
-            }
     }
 
     segmentation_ch = run_ted_segmentation(heavy_chunk_ch)
