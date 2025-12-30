@@ -38,7 +38,7 @@ nextflow run workflows/annotate.nf -profile debug,docker
 
 The pipeline expects two inputs:
 
-- a zip file containing PDB files
+- a zip file containing PDB files (or a directory for large-scale processing)
 - a file containing all the ids that should be processed
 
 Given the following directory:
@@ -50,6 +50,23 @@ pdb_files/A0A0B5IZ33.pdb
 pdb_files/UPI001E716444.pdb
 pdb_files/A0A6C0N656.pdb
 ```
+
+### Method 1: Using the utility script (recommended)
+
+Create a file containing all the ids to process:
+
+```bash
+# From a directory
+python3 examples/create_id_list.py --input pdb_files/ --output ids.txt
+
+# From a directory with a limit
+python3 examples/create_id_list.py --input pdb_files/ --output ids.txt --max 10000
+
+# From a zip file
+python3 examples/create_id_list.py --input pdb_files.zip --output ids.txt --max 5000
+```
+
+### Method 2: Manual preparation
 
 Create a zip file from all PDB files in this directory:
 

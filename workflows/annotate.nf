@@ -27,6 +27,7 @@ include { collect_taxonomy } from '../modules/collect_taxonomy.nf'
 //can delete line - unused process.
 include { extract_pdb_from_zip } from '../modules/extract_pdb_from_zip.nf'
 include { filter_pdb } from '../modules/filter_pdb.nf'
+include { chop_pdb_from_directory } from '../modules/chop_pdb_from_directory.nf'
 
 // Domain prediction modules
 // include { run_chainsaw } from '../modules/run_chainsaw.nf'
@@ -87,8 +88,25 @@ def validateParameters() {
         params.max_entries = 10
     }
 
-    if (!params.uniprot_csv_file || !params.pdb_zip_file) {
-        error("Both UniProt CSV file and PDB ZIP file must be specified.")
+    if (params.test_mode && !params.max_entries) {
+        params.max_entries = 10000
+        log.info("Test mode enabled: limiting to ${params.max_entries} entries")
+    }
+
+    // Check for directory vs ZIP input mode
+    def using_directory = params.pdb_directory != null && params.pdb_directory != ''
+    def using_zip = params.pdb_zip_file != null && params.pdb_zip_file != ''
+
+    if (!using_directory && !using_zip) {
+        error("Either pdb_directory or pdb_zip_file must be specified.")
+    }
+
+    if (using_directory && using_zip) {
+        error("Cannot specify both pdb_directory and pdb_zip_file. Choose one input mode.")
+    }
+
+    if (!params.uniprot_csv_file) {
+        error("Id file not specified. Please provide this through the --uniprot_csv_file parameter.")
     }
 
     // Ensure results directory exists
@@ -100,8 +118,11 @@ def validateParameters() {
     if (!params.uniprot_csv_file || !file(params.uniprot_csv_file).exists()) {
         error("UniProt CSV file not found: ${params.uniprot_csv_file}")
     }
-    if (!params.pdb_zip_file || !file(params.pdb_zip_file).exists()) {
+    if (using_zip && !file(params.pdb_zip_file).exists()) {
         error("PDB ZIP file not found: ${params.pdb_zip_file}")
+    }
+    if (using_directory && !file(params.pdb_directory).exists()) {
+        error("PDB directory not found: ${params.pdb_directory}")
     }
 
     log.info(
@@ -111,14 +132,17 @@ def validateParameters() {
     ==============================================
     Project name        : ${params.project_name}
     UniProt CSV file    : ${params.uniprot_csv_file}
-    PDB ZIP file        : ${params.pdb_zip_file}
+    ${using_directory ? "PDB directory       : ${params.pdb_directory}" : ""}
+    ${using_zip ? "PDB ZIP file        : ${params.pdb_zip_file}" : ""}
     Main chunk size     : ${params.chunk_size}
     Light chunk size    : ${params.light_chunk_size}
     Heavy chunk size    : ${params.heavy_chunk_size}
     Min chain residues  : ${params.min_chain_residues}
-    Max entries (debug) : ${params.max_entries ?: 'N/A'}
+    Max entries (limit) : ${params.max_entries ?: 'N/A'}
     Results dir         : ${params.results_dir}
     Debug mode          : ${params.debug}
+    Test mode           : ${params.test_mode ?: false}
+    Streaming chunks    : ${params.streaming_chunks ?: false}
     ==============================================
     """.stripIndent()
     )
@@ -137,77 +161,125 @@ workflow {
     // PHASE 1: Data Preparation
     // =========================================
 
-    // Create UniProt ID channel
-    uniprot_ids_ch = Channel.fromPath(params.uniprot_csv_file, checkIfExists: true)
-        .splitText()
-        .map { it.trim() }
-        .filter { it != ''}
-        .unique()
+    // Determine input mode: Directory vs ZIP
+    def using_directory = params.pdb_directory != null && params.pdb_directory != ''
 
-    // Apply debug limit if enabled
-    if (params.debug && params.max_entries) {
-        uniprot_ids_ch = uniprot_ids_ch.take(params.max_entries)
-    }
+    if (using_directory) {
+        // ===== DIRECT DIRECTORY MODE (for squashfs or any file system) =====
+        log.info("Using direct directory mode: reading PDB files from ${params.pdb_directory}")
 
-    // Create chunked AF IDs for processing
-    chunked_af_ids_ch = uniprot_ids_ch
-        .collectFile(
-            name: 'all_af_ids.txt',
-            newLine: true,
-            storeDir: "${params.results_dir}/intermediate",
-        )
-        .splitText(by: params.chunk_size, file: true)
-        .toList()
-        .flatMap { List chunk_files ->
-            // Emit a tuple (id, path) where id is the chunk index and path is the chunk file
-            chunk_files.withIndex().collect { cf, idx ->
-                [ idx, cf ]
-            }
+        // Stream PDB files directly from directory using glob pattern
+        // This avoids loading all paths into memory
+        // Pattern matches both files in root directory and in any subdirectories
+        def pdb_pattern = "${params.pdb_directory}/{*.pdb,**/*.pdb}"
+        log.info("Searching for PDB files with pattern: ${pdb_pattern}")
+
+        // Create channel from files, optionally limit for testing
+        all_pdb_files_ch = Channel.fromPath(pdb_pattern, checkIfExists: false, type: 'file')
+
+        // Apply debug/test limit if enabled
+        if ((params.debug || params.test_mode) && params.max_entries) {
+            log.info("Limiting to ${params.max_entries} structures for testing")
+            all_pdb_files_ch = all_pdb_files_ch.take(params.max_entries)
         }
 
-    // Get taxonomic data
-    uniprot_data_ch = get_uniprot_data(chunked_af_ids_ch)
-    collected_taxonomy_ch = uniprot_data_ch.collectFile(
-        name: 'all_taxonomy.tsv',
-        keepHeader: true,
-        newLine: true,
-        storeDir: params.results_dir,
-        sort: { it -> it[0] } // sort by chunk id
-    ) { it -> it[1] } // use file name to collect
+        // Buffer into chunks for processing
+        filtered_pdb_ch = all_pdb_files_ch
+            .buffer(size: params.chunk_size as int, remainder: true)
 
-    // af_ids_ch.view { "af_ids_ch: " + it }
-    // chunked_af_ids_ch.view { "chunked_af_ids_ch: " + it }
+        // For directory mode, skip UniProt taxonomy fetching
+        // Create empty taxonomy file as placeholder
+        def empty_tax = file("${params.results_dir}/all_taxonomy.tsv")
+        empty_tax.text = "accession\ttaxonomy\n"
+        collected_taxonomy_ch = Channel.value(empty_tax)
 
-    // Extract and filter PDB files
-    // pass only the ID file path channel (af_ids_ch) to the extractor so it receives a path
-    unfiltered_pdb_ch = extract_pdb_from_zip(chunked_af_ids_ch, file(params.pdb_zip_file))
-    // unfiltered_pdb_ch = extract_pdb_from_zip(af_ids_ch, file(params.pdb_zip_file))
-    filtered_pdb_ch = filter_pdb(unfiltered_pdb_ch, params.min_chain_residues)
+        // No af_ids_ch needed for directory mode
+        af_ids_ch = Channel.empty()
 
-    // TODO: currently the rest of the workflow uses channel without chunk index
-    //       we should feed, this through to all subsequent steps for better
-    //       tracking / debugging / caching
-    af_ids_ch = chunked_af_ids_ch.map { it -> it[1] }
-    filtered_pdb_ch = filtered_pdb_ch.map { it -> it[1] }
+    } else {
+        // ===== ZIP INPUT MODE (original logic) =====
+        log.info("Using ZIP input mode: extracting from ${params.pdb_zip_file}")
+
+        // Create UniProt ID channel
+        uniprot_ids_ch = Channel.fromPath(params.uniprot_csv_file, checkIfExists: true)
+            .splitText()
+            .map { it.trim() }
+            .filter { it != ''}
+            .unique()
+
+        // Apply debug/test limit if enabled
+        if ((params.debug || params.test_mode) && params.max_entries) {
+            uniprot_ids_ch = uniprot_ids_ch.take(params.max_entries)
+        }
+
+        // Create chunked AF IDs for processing
+        chunked_af_ids_ch = uniprot_ids_ch
+            .collectFile(
+                name: 'all_af_ids.txt',
+                newLine: true,
+                storeDir: "${params.results_dir}/intermediate",
+            )
+            .splitText(by: params.chunk_size, file: true)
+            .toList()
+            .flatMap { List chunk_files ->
+                // Emit a tuple (id, path) where id is the chunk index and path is the chunk file
+                chunk_files.withIndex().collect { cf, idx ->
+                    [ idx, cf ]
+                }
+            }
+
+        // Get taxonomic data
+        uniprot_data_ch = get_uniprot_data(chunked_af_ids_ch)
+        collected_taxonomy_ch = uniprot_data_ch.collectFile(
+            name: 'all_taxonomy.tsv',
+            keepHeader: true,
+            newLine: true,
+            storeDir: params.results_dir,
+            sort: { it -> it[0] } // sort by chunk id
+        ) { it -> it[1] } // use file name to collect
+
+        // Extract and filter PDB files
+        unfiltered_pdb_ch = extract_pdb_from_zip(chunked_af_ids_ch, file(params.pdb_zip_file))
+        filtered_pdb_ch = filter_pdb(unfiltered_pdb_ch, params.min_chain_residues)
+
+        // Remove chunk index for downstream processes
+        af_ids_ch = chunked_af_ids_ch.map { it -> it[1] }
+        filtered_pdb_ch = filtered_pdb_ch.map { it -> it[1] }
+    }
 
     // =========================================
     // PHASE 2: Domain Prediction
     // =========================================
 
-    // deterministic chunking: collect & sort, then chunk
-    // required for caching, but waits for all PDBs first
-    heavy_chunk_ch = filtered_pdb_ch
-        .flatten()
-        .toSortedList { it.toString() } // sort PDB paths deterministically
-        .flatMap { List allFiles ->
-            def chunks = []
-            def step = params.heavy_chunk_size as int
-            for (int i = 0; i < allFiles.size(); i += step) {
-                def end = Math.min(i + step, allFiles.size())
-                chunks << allFiles.subList(i, end)
+    // Chunking strategy based on streaming_chunks parameter
+    if (params.streaming_chunks) {
+        // STREAMING MODE: Process chunks as they arrive (no sorting, no waiting for all files)
+        // More memory-efficient for large datasets, but less deterministic caching
+        log.info("Using streaming chunking mode for GPU processing (heavy_chunk_size=${params.heavy_chunk_size})")
+
+        heavy_chunk_ch = filtered_pdb_ch
+            .flatten()
+            .buffer(size: params.heavy_chunk_size as int, remainder: true)
+
+    } else {
+        // DETERMINISTIC MODE: Sort all files before chunking (original behavior)
+        // Better for caching but requires collecting all files in memory first
+        // WARNING: This mode is NOT recommended for datasets >1M structures
+        log.info("Using deterministic chunking mode (may consume significant memory)")
+
+        heavy_chunk_ch = filtered_pdb_ch
+            .flatten()
+            .toSortedList { it.toString() } // sort PDB paths deterministically
+            .flatMap { List allFiles ->
+                def chunks = []
+                def step = params.heavy_chunk_size as int
+                for (int i = 0; i < allFiles.size(); i += step) {
+                    def end = Math.min(i + step, allFiles.size())
+                    chunks << allFiles.subList(i, end)
+                }
+                return chunks
             }
-            return chunks
-        }
+    }
 
     segmentation_ch = run_ted_segmentation(heavy_chunk_ch)
 
@@ -251,11 +323,20 @@ workflow {
             }
         }
 
-    // Chop pdbs in parallel using chunks and extracting from zip on-the-fly
-    chopped_pdb_ch = chop_pdb_from_zip(
-        consensus_chunks_ch,
-        file(params.pdb_zip_file)
-    )
+    // Chop pdbs in parallel - use appropriate method based on input mode
+    if (using_directory) {
+        // Directory mode: read PDBs from directory
+        chopped_pdb_ch = chop_pdb_from_directory(
+            consensus_chunks_ch,
+            params.pdb_directory
+        )
+    } else {
+        // ZIP mode: extract PDBs from ZIP file
+        chopped_pdb_ch = chop_pdb_from_zip(
+            consensus_chunks_ch,
+            file(params.pdb_zip_file)
+        )
+    }
 
     // Generate MD5 hashes for domains added a new file and script_ch
     md5_chunks_ch = create_md5(chopped_pdb_ch)

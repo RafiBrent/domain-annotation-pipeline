@@ -1,4 +1,4 @@
-process chop_pdb_from_zip {
+process chop_pdb_from_directory {
     label 'sge_low'
     container 'domain-annotation-pipeline-script'
     // NOTE: Publishing disabled for large-scale runs to avoid millions of files in single directory
@@ -7,14 +7,14 @@ process chop_pdb_from_zip {
 
     input:
     tuple val(id), path(consensus_chunk)
-    path pdb_zip
+    val pdb_directory
 
     output:
     tuple val(id), path('chopped_pdbs/*.pdb')
-    
+
     script:
     """
     mkdir -p chopped_pdbs
-    ${params.chop_pdb_script} --consensus ${consensus_chunk} --pdb-zip ${pdb_zip} --output chopped_pdbs
+    ${params.chop_pdb_script} --consensus ${consensus_chunk} --pdb-dir ${pdb_directory} --output chopped_pdbs
     """
 }
