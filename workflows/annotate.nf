@@ -110,9 +110,13 @@ def validateParameters() {
         error("Id file not specified. Please provide this through the --uniprot_csv_file parameter.")
     }
 
-    // Ensure results directory exists
+    // Ensure results directory exists and validate it's clean
     if (!file(params.results_dir).exists()) {
         file(params.results_dir).mkdirs()
+        log.info("Created new results directory: ${params.results_dir}")
+    } else {
+        // Directory exists - check for conflicting files
+        validateResultsDirectory()
     }
 
     // Validate required parameters
@@ -146,6 +150,65 @@ def validateParameters() {
     ==============================================
     """.stripIndent()
     )
+}
+
+def validateResultsDirectory() {
+    // Critical output files that should not exist from previous runs
+    def critical_files = [
+        'domain_assignments.consensus.tsv',
+        'domain_assignments.chainsaw.tsv',
+        'domain_assignments.merizo.tsv',
+        'domain_assignments.unidoc.tsv',
+        'all_stride_summaries.tsv',
+        'all_md5.tsv',
+        'all_domain_globularity.tsv',
+        'all_domain_quality.csv',
+        'all_plddt.tsv',
+        'final_domain_annotations.tsv'
+    ]
+
+    def existing_files = []
+    critical_files.each { filename ->
+        def filepath = file("${params.results_dir}/${filename}")
+        if (filepath.exists()) {
+            existing_files << filename
+        }
+    }
+
+    if (existing_files.size() > 0) {
+        def error_msg = """
+        ================================================================================
+        ERROR: Results directory already contains output files from a previous run!
+        ================================================================================
+
+        Results directory: ${params.results_dir}
+        Project name:      ${params.project_name}
+
+        Found ${existing_files.size()} existing output file(s):
+        ${existing_files.collect { "  - ${it}" }.join('\n')}
+
+        This will cause data inconsistencies because Nextflow's storeDir will reuse
+        these files instead of regenerating them, leading to mismatched datasets.
+
+        TO FIX THIS ISSUE, choose one of the following options:
+
+        1. Delete the existing results directory:
+           rm -rf ${params.results_dir}
+
+        2. Use a different project name:
+           --project_name ${params.project_name}_v2
+
+        3. Move the old results to a backup location:
+           mv ${params.results_dir} ${params.results_dir}.backup.\$(date +%Y%m%d_%H%M%S)
+
+        Then re-run your pipeline command.
+        ================================================================================
+        """.stripIndent()
+
+        error(error_msg)
+    }
+
+    log.info("✓ Results directory validation passed: ${params.results_dir}")
 }
 
 // ===============================================
