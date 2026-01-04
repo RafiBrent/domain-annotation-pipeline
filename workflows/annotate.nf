@@ -26,6 +26,7 @@ include { get_uniprot_data } from '../modules/get_uniprot.nf'
 include { collect_taxonomy } from '../modules/collect_taxonomy.nf'
 //can delete line - unused process.
 include { extract_pdb_from_zip } from '../modules/extract_pdb_from_zip.nf'
+include { extract_pdb_from_directory } from '../modules/extract_pdb_from_directory.nf'
 include { filter_pdb } from '../modules/filter_pdb.nf'
 include { chop_pdb_from_directory } from '../modules/chop_pdb_from_directory.nf'
 
@@ -160,106 +161,91 @@ workflow {
     // PHASE 1: Data Preparation
     // =========================================
 
+    // Read and process UniProt IDs
+    uniprot_ids_ch = Channel.fromPath(params.uniprot_csv_file, checkIfExists: true)
+        .splitText()
+        .map { it.trim() }
+        .filter { it != ''}
+        .unique()
+
+    // Apply debug/test limit if enabled
+    if ((params.debug || params.test_mode) && params.max_entries) {
+        uniprot_ids_ch = uniprot_ids_ch.take(params.max_entries)
+    }
+
+    // Create chunked AF IDs for processing
+    chunked_af_ids_ch = uniprot_ids_ch
+        .collectFile(
+            name: 'all_af_ids.txt',
+            newLine: true,
+            storeDir: "${params.results_dir}/intermediate",
+        )
+        .splitText(by: params.chunk_size, file: true)
+        .toList()
+        .flatMap { List chunk_files ->
+            chunk_files.withIndex().collect { cf, idx ->
+                [ idx, cf ]
+            }
+        }
+
     // Determine input mode: Directory vs ZIP
     def using_directory = params.pdb_directory != null && params.pdb_directory != ''
 
     if (using_directory) {
-        // ===== DIRECT DIRECTORY MODE (for squashfs or any file system) =====
-        log.info("Using direct directory mode: reading PDB files from ${params.pdb_directory}")
+        log.info("Using directory mode: extracting from ${params.pdb_directory}")
 
-        // Stream PDB files directly from directory using glob pattern
-        def pdb_pattern = "${params.pdb_directory}/{*.pdb,**/*.pdb}"
-        log.info("Searching for PDB files with pattern: ${pdb_pattern}")
+        // Extract PDB files from directory
+        unfiltered_pdb_ch = extract_pdb_from_directory(chunked_af_ids_ch, params.pdb_directory)
 
-        // Create channel from files, optionally limit for testing
-        all_pdb_files_ch = Channel.fromPath(pdb_pattern, checkIfExists: false, type: 'file')
+    } else {
+        // ===== ZIP INPUT MODE =====
+        log.info("Using ZIP input mode: extracting from ${params.pdb_zip_file}")
 
-        // Apply debug/test limit if enabled
-        if ((params.debug || params.test_mode) && params.max_entries) {
-            log.info("Limiting to ${params.max_entries} structures for testing")
-            all_pdb_files_ch = all_pdb_files_ch.take(params.max_entries)
-        }
+        // Extract PDB files from ZIP
+        unfiltered_pdb_ch = extract_pdb_from_zip(chunked_af_ids_ch, file(params.pdb_zip_file))
+    }
 
-        // Buffer into chunks for processing
-        filtered_pdb_ch = all_pdb_files_ch
-            .buffer(size: params.chunk_size as int, remainder: true)
+    // Filter PDB files based on minimum chain length
+    filtered_pdb_ch = filter_pdb(unfiltered_pdb_ch, params.min_chain_residues)
 
-        // For directory mode, skip UniProt taxonomy fetching
-        // Create empty taxonomy file as placeholder
+    // Remove chunk index for downstream processes
+    af_ids_ch = chunked_af_ids_ch.map { it -> it[1] }
+    filtered_pdb_ch = filtered_pdb_ch.map { it -> it[1] }
+
+    // ===== TAXONOMY FETCHING =====
+    if (!params.fetch_taxonomy) {
+        log.info("Skipping taxonomy fetching (fetch_taxonomy=false)")
         def empty_tax = file("${params.results_dir}/all_taxonomy.tsv")
         empty_tax.text = "accession\ttaxonomy\n"
         collected_taxonomy_ch = Channel.value(empty_tax)
-
-        // No af_ids_ch needed for directory mode
-        af_ids_ch = Channel.empty()
-
     } else {
-        // ===== ZIP INPUT MODE (original logic) =====
-        log.info("Using ZIP input mode: extracting from ${params.pdb_zip_file}")
-
-        // Create UniProt ID channel
-        uniprot_ids_ch = Channel.fromPath(params.uniprot_csv_file, checkIfExists: true)
-            .splitText()
-            .map { it.trim() }
-            .filter { it != ''}
-            .unique()
-
-        // Apply debug/test limit if enabled
-        if ((params.debug || params.test_mode) && params.max_entries) {
-            uniprot_ids_ch = uniprot_ids_ch.take(params.max_entries)
-        }
-
-        // Create chunked AF IDs for processing
-        chunked_af_ids_ch = uniprot_ids_ch
-            .collectFile(
-                name: 'all_af_ids.txt',
-                newLine: true,
-                storeDir: "${params.results_dir}/intermediate",
-            )
-            .splitText(by: params.chunk_size, file: true)
-            .toList()
-            .flatMap { List chunk_files ->
-                // Emit a tuple (id, path) where id is the chunk index and path is the chunk file
-                chunk_files.withIndex().collect { cf, idx ->
-                    [ idx, cf ]
-                }
-            }
-
-        // Get taxonomic data
+        log.info("Fetching taxonomy from UniProt")
         uniprot_data_ch = get_uniprot_data(chunked_af_ids_ch)
         collected_taxonomy_ch = uniprot_data_ch.collectFile(
             name: 'all_taxonomy.tsv',
             keepHeader: true,
             newLine: true,
             storeDir: params.results_dir,
-            sort: { it -> it[0] } // sort by chunk id
-        ) { it -> it[1] } // use file name to collect
-
-        // Extract and filter PDB files
-        unfiltered_pdb_ch = extract_pdb_from_zip(chunked_af_ids_ch, file(params.pdb_zip_file))
-        filtered_pdb_ch = filter_pdb(unfiltered_pdb_ch, params.min_chain_residues)
-
-        // Remove chunk index for downstream processes
-        af_ids_ch = chunked_af_ids_ch.map { it -> it[1] }
-        filtered_pdb_ch = filtered_pdb_ch.map { it -> it[1] }
+            sort: { it -> it[0] }
+        ) { it -> it[1] }
     }
 
     // =========================================
     // PHASE 2: Domain Prediction
     // =========================================
 
-        heavy_chunk_ch = filtered_pdb_ch
-            .flatten()
-            .toSortedList { it.toString() } // sort PDB paths deterministically
-            .flatMap { List allFiles ->
-                def chunks = []
-                def step = params.heavy_chunk_size as int
-                for (int i = 0; i < allFiles.size(); i += step) {
-                    def end = Math.min(i + step, allFiles.size())
-                    chunks << allFiles.subList(i, end)
-                }
-                return chunks
-    }
+    heavy_chunk_ch = filtered_pdb_ch
+        .flatten()
+        .toSortedList { it.toString() } // sort PDB paths deterministically
+        .flatMap { List allFiles ->
+            def chunks = []
+            def step = params.heavy_chunk_size as int
+            for (int i = 0; i < allFiles.size(); i += step) {
+                def end = Math.min(i + step, allFiles.size())
+                chunks << allFiles.subList(i, end)
+            }
+            return chunks
+        }
 
     segmentation_ch = run_ted_segmentation(heavy_chunk_ch)
 
