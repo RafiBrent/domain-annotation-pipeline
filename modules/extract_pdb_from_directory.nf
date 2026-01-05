@@ -1,6 +1,6 @@
 process extract_pdb_from_directory {
     label 'sge_low'
-    container 'domain-annotation-pipeline-pdb-tools'
+    container 'domain-annotation-pipeline-script'
 
     input:
     tuple( val(id), path(id_file) )
@@ -11,9 +11,6 @@ process extract_pdb_from_directory {
 
     script:
     """
-    awk '{print \$0 ".pdb"}' ${id_file} > pdb_list.txt
-    while read -r fname; do
-        find ${pdb_directory} -name "\$fname" -type f -exec ln -s {} . \\;
-    done < pdb_list.txt
+    ${params.extract_pdb_script} ${id_file} ${pdb_directory}
     """
 }
