@@ -103,6 +103,26 @@ The parameter ```--heavy_chunk_size``` is used for the run_ted_segmentation proc
 
 ## Running on HPC
 
+### SLURM Array Jobs (Automatic)
+
+**NEW**: The pipeline now automatically uses SLURM array jobs for improved efficiency! This significantly reduces scheduler overhead by grouping parallel tasks into array jobs instead of submitting thousands of individual jobs.
+
+#### Benefits:
+- 10-100x fewer job submissions to the scheduler
+- Faster queue times and reduced scheduler load
+- No changes needed to your existing commands - it's automatic!
+
+#### Configuration (optional):
+```bash
+# Adjust array sizes if needed for your cluster
+nextflow run workflows/annotate.nf \
+    --slurm_array_max_cpu 500 \   # Max tasks per CPU array (default: 500)
+    --slurm_array_max_gpu 100 \   # Max tasks per GPU array (default: 100)
+    -profile singularity
+```
+
+**Documentation**: See `docs/SLURM_ARRAY_JOBS.md` for detailed information and `docs/SLURM_ARRAY_JOBS_QUICKSTART.md` for quick reference.
+
 ## Install (with singularity)
 
 These instructions are specific to the HPC setup in UCL Computer Sciences:
