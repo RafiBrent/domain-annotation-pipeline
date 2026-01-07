@@ -140,3 +140,6 @@ foldseek/assets/DB/cath_ssg5_fs_db_ss.index
 # misc
 assets/
 .claude/
+logs/
+examples/
+reconstructed_domains/

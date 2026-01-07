@@ -184,3 +184,87 @@ The directory containing these singularity images can be added to your config fi
 nextflow run workflows/annotate -profile singularity \
     --singularity_image_dir "/path/to/singularity_images"
 ```
+
+## Reconstructing Chopped Domain PDB Files
+
+### Overview
+
+By default, the pipeline does not publish individual chopped domain PDB files to save disk space (potentially millions of small files). Instead, these files exist temporarily in work directories and are typically deleted after workflow completion.
+
+However, you can reconstruct these chopped PDB files on-demand using the published workflow outputs combined with your original input PDB files.
+
+### Basic Usage
+
+After your workflow completes and work directories are deleted:
+
+```bash
+python3 utils/reconstruct_chopped_pdbs.py \
+    --transformed-consensus results/PROJECT_NAME/transformed_consensus.tsv \
+    --md5-file results/PROJECT_NAME/all_md5.tsv \
+    --pdb-dir /path/to/original/pdbs \
+    --output ./reconstructed_domains \
+    --validate
+```
+
+Or if you used a ZIP file as input:
+
+```bash
+python3 utils/reconstruct_chopped_pdbs.py \
+    --transformed-consensus results/PROJECT_NAME/transformed_consensus.tsv \
+    --md5-file results/PROJECT_NAME/all_md5.tsv \
+    --pdb-zip /path/to/structures.zip \
+    --output ./reconstructed_domains \
+    --validate
+```
+
+### Filtering Options
+
+**Reconstruct only high-confidence domains:**
+
+```bash
+python3 utils/reconstruct_chopped_pdbs.py \
+    --transformed-consensus results/PROJECT_NAME/transformed_consensus.tsv \
+    --md5-file results/PROJECT_NAME/all_md5.tsv \
+    --pdb-dir /path/to/original/pdbs \
+    --output ./high_confidence_domains \
+    --consensus-level high \
+    --validate
+```
+
+**Reconstruct specific domains from a list:**
+
+```bash
+# Create a file with domain IDs (one per line)
+cat > domain_list.txt <<EOF
+AF-A0A009Q8S9-F1-model_v4_01
+AF-A0A010RNF5-F1-model_v4_01
+EOF
+
+python3 utils/reconstruct_chopped_pdbs.py \
+    --transformed-consensus results/PROJECT_NAME/transformed_consensus.tsv \
+    --md5-file results/PROJECT_NAME/all_md5.tsv \
+    --pdb-dir /path/to/original/pdbs \
+    --output ./selected_domains \
+    --domain-ids domain_list.txt \
+    --validate
+```
+
+### Validation
+
+The `--validate` flag enables MD5 hash comparison to ensure reconstructed domains are identical to those produced during the workflow. This guarantees correctness.
+
+### Performance
+
+- **Directory mode**: ~100-500 domains/second (disk I/O bound)
+- **ZIP mode**: ~200-1000 domains/second (CPU bound)
+- **Large datasets** (1M+ domains): Can be parallelized by splitting the input file
+
+See `examples/reconstruct_domains_example.sh` for more examples, including parallel reconstruction patterns.
+
+### Help
+
+For complete documentation and all available options:
+
+```bash
+python3 utils/reconstruct_chopped_pdbs.py --help
+```
