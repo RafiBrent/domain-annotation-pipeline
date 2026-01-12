@@ -143,3 +143,5 @@ assets/
 logs/
 examples/
 reconstructed_domains/
+foldseek/
+cath_v4_4_0_s95_foldseekdb/
