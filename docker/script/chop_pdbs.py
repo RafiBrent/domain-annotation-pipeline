@@ -98,16 +98,48 @@ def run_pdb_selres(pdb_content: str, domain_ranges: List[Tuple[int, int]], outpu
             except OSError:
                 pass
 
+def build_path_mapping(id_file: str) -> Dict[str, str]:
+    """
+    Build a mapping from ID stem to full path from an ID file.
 
-def process_from_directory_or_paths(consensus_file: str, output_dir: str, pdb_dir: str = "") -> Tuple[int, int, int]:
+    If entries are absolute paths, extracts the stem as the key.
+    If entries are bare IDs, the mapping value will be the ID itself.
+
+    Args:
+        id_file: Path to original input ID file
+
+    Returns:
+        Dictionary mapping ID stem to full path
+    """
+    mapping = {}
+    with open(id_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if os.path.isabs(line):
+                # Extract stem from path: /data/shards/00/AF-A.pdb -> AF-A
+                stem = Path(line).stem
+                mapping[stem] = line
+            else:
+                # Bare ID - use as-is
+                mapping[line] = line
+    return mapping
+
+def process_from_directory_or_paths(
+    consensus_file: str,
+    output_dir: str,
+    pdb_dir: str = "",
+    path_mapping: Optional[Dict[str, str]] = None
+) -> Tuple[int, int, int]:
     """
     Process PDB files from a directory or using a path mapping.
 
     Args:
         consensus_file: Path to consensus TSV file
-        pdb_dir: Directory containing PDB files (used if path_mapping not provided)
         output_dir: Output directory for chopped domain files
-        path_mapping: Optional dict mapping pdb_id -> full path (for sharded directories)
+        pdb_dir: Directory containing PDB files (fallback if not in path_mapping)
+        path_mapping: Optional dict mapping ID stem to full path (for sharded dirs)
 
     Returns:
         Tuple of (consensus_count, processed_count, missing_count)
@@ -133,7 +165,9 @@ def process_from_directory_or_paths(consensus_file: str, output_dir: str, pdb_di
             med_domains = parse_domain_boundaries(fields[7], 'med')
 
             # Look up path from mapping if available, otherwise construct from pdb_dir
-            if os.path.isabs(pdb_id):
+            if path_mapping and pdb_id in path_mapping:
+                pdb_path = path_mapping[pdb_id]
+            elif os.path.isabs(pdb_id):
                 pdb_path = pdb_id
             else:
                 pdb_path = os.path.join(pdb_dir, f"{pdb_id}.pdb")
@@ -150,8 +184,11 @@ def process_from_directory_or_paths(consensus_file: str, output_dir: str, pdb_di
 
             all_domains.sort(key=lambda x: x[1][0][0])
 
+            # Extract basename for output filename (handles both paths and bare IDs)
+            pdb_basename = Path(pdb_id).stem if os.path.isabs(pdb_id) else pdb_id
+
             for i, (level, domain_ranges) in enumerate(all_domains, start=1):
-                out_file = os.path.join(output_dir, f"{pdb_id}_{i:02d}.pdb")
+                out_file = os.path.join(output_dir, f"{pdb_basename}_{i:02d}.pdb")
                 run_pdb_selres(pdb_path, domain_ranges, out_file, is_file=True)
                 processed_count += 1
 
@@ -308,8 +345,11 @@ Examples:
         if error_count > 0 or (processed_count == 0 and missing_count > 0):
             sys.exit(1)
     else:
+        path_mapping = None
+        if args.id_file:
+            path_mapping = build_path_mapping(args.id_file)
         consensus_count, processed_count, missing_count = process_from_directory_or_paths(
-            consensus_file, pdb_source, output_dir
+            consensus_file, output_dir, pdb_source, path_mapping
         )
         print(f"✓ Processed {consensus_count} consensus entries, generated {processed_count} domain files")
         if missing_count > 0:

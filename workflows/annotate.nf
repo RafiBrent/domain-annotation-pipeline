@@ -236,13 +236,18 @@ workflow {
         uniprot_ids_ch = uniprot_ids_ch.take(params.max_entries)
     }
 
-    // Create chunked AF IDs for processing
-    chunked_af_ids_ch = uniprot_ids_ch
+    // Capture complete id file BEFORE splitting (needed for chop_pdb_from_directory path mapping)
+    // Use .first() to convert queue channel to value channel for reuse
+    all_af_ids_file_ch = uniprot_ids_ch
         .collectFile(
             name: 'all_af_ids.txt',
             newLine: true,
             storeDir: "${params.results_dir}/intermediate",
         )
+        .first()
+
+    // Create chunked AF IDs for processing
+    chunked_af_ids_ch = all_af_ids_file_ch
         .splitText(by: params.chunk_size, file: true)
         .toList()
         .flatMap { List chunk_files ->
@@ -272,7 +277,6 @@ workflow {
     filtered_pdb_ch = filter_pdb(unfiltered_pdb_ch, params.min_chain_residues)
 
     // Remove chunk index for downstream processes
-    af_ids_ch = chunked_af_ids_ch.map { it -> it[1] }
     filtered_pdb_ch = filtered_pdb_ch.map { it -> it[1] }
 
     // ===== TAXONOMY FETCHING =====
@@ -355,10 +359,11 @@ workflow {
     // Chop pdbs in parallel - use appropriate method based on input mode
     if (using_directory) {
         // Directory mode: read PDBs from directory, using path mapping for sharded dirs
+        // Pass COMPLETE id file (not chunks) so every process has full stem→path mapping
         chopped_pdb_ch = chop_pdb_from_directory(
             consensus_chunks_ch,
             params.pdb_directory,
-            af_ids_ch
+            all_af_ids_file_ch
         )
     } else {
         // ZIP mode: extract PDBs from ZIP file
