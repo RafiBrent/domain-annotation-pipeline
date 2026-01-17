@@ -2,6 +2,10 @@
 """
 PDB chopping script that extracts domain segments from PDB structures.
 Supports both directory of PDB files and zip archives for efficient processing.
+
+For sharded directory structures, use --id-file to provide the original ID file
+containing full paths. The script will auto-detect if entries are paths and
+build an internal ID-to-path mapping.
 """
 import os
 import sys
@@ -95,51 +99,62 @@ def run_pdb_selres(pdb_content: str, domain_ranges: List[Tuple[int, int]], outpu
                 pass
 
 
-def process_from_directory(consensus_file: str, pdb_dir: str, output_dir: str) -> Tuple[int, int, int]:
+def process_from_directory_or_paths(consensus_file: str, output_dir: str, pdb_dir: str = "") -> Tuple[int, int, int]:
     """
-    Process PDB files from a directory.
-    
+    Process PDB files from a directory or using a path mapping.
+
+    Args:
+        consensus_file: Path to consensus TSV file
+        pdb_dir: Directory containing PDB files (used if path_mapping not provided)
+        output_dir: Output directory for chopped domain files
+        path_mapping: Optional dict mapping pdb_id -> full path (for sharded directories)
+
     Returns:
         Tuple of (consensus_count, processed_count, missing_count)
     """
     consensus_count = 0
     processed_count = 0
     missing_count = 0
-    
+
     with open(consensus_file, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            
+
             consensus_count += 1
             fields = line.split('\t')
-            
+
             if len(fields) < 8:
                 continue
-            
+
             pdb_id = fields[0]
             high_domains = parse_domain_boundaries(fields[6], 'high')
             med_domains = parse_domain_boundaries(fields[7], 'med')
-            
-            pdb_path = os.path.join(pdb_dir, f"{pdb_id}.pdb")
+
+            # Look up path from mapping if available, otherwise construct from pdb_dir
+            if os.path.isabs(pdb_id):
+                pdb_path = pdb_id
+            else:
+                pdb_path = os.path.join(pdb_dir, f"{pdb_id}.pdb")
+
             if not os.path.exists(pdb_path):
                 print(f"⚠️  PDB not found: {pdb_path}", file=sys.stderr)
                 missing_count += 1
                 continue
-            
+
             # Combine and sort all domains by first segment's start
             all_domains = high_domains + med_domains
             if not all_domains:
                 continue
-                
+
             all_domains.sort(key=lambda x: x[1][0][0])
-            
+
             for i, (level, domain_ranges) in enumerate(all_domains, start=1):
                 out_file = os.path.join(output_dir, f"{pdb_id}_{i:02d}.pdb")
                 run_pdb_selres(pdb_path, domain_ranges, out_file, is_file=True)
                 processed_count += 1
-    
+
     return consensus_count, processed_count, missing_count
 
 
@@ -225,32 +240,37 @@ def main():
 Examples:
   # Process from directory of PDB files
   %(prog)s --consensus consensus.tsv --pdb-dir ./pdbs --output ./domains
-  
+
   # Process from zip archive (faster for shared filesystems)
   %(prog)s --consensus consensus.tsv --pdb-zip pdbs.zip --output ./domains
-  
+
+  # Process using ID file with full paths (for sharded directories)
+  %(prog)s --consensus consensus.tsv --id-file ids_with_paths.txt --output ./domains
+
   # Legacy positional arguments (deprecated)
   %(prog)s consensus.tsv output_dir
         """
     )
-    
-    parser.add_argument('--consensus', '-c', 
+
+    parser.add_argument('--consensus', '-c',
                         help='Path to consensus TSV file')
     parser.add_argument('--pdb-dir', '-d',
                         help='Directory containing PDB files')
     parser.add_argument('--pdb-zip', '-z',
                         help='Zip file containing PDB files')
+    parser.add_argument('--id-file', '-i',
+                        help='Original ID file (auto-detects if entries are paths for sharded directories)')
     parser.add_argument('--output', '-o',
                         help='Output directory for chopped domain PDB files')
-    
+
     # Support legacy positional arguments for backward compatibility
     parser.add_argument('legacy_consensus', nargs='?',
                         help=argparse.SUPPRESS)
     parser.add_argument('legacy_output', nargs='?',
                         help=argparse.SUPPRESS)
-    
+
     args = parser.parse_args()
-    
+
     # Handle legacy positional arguments
     if args.legacy_consensus and args.legacy_output:
         consensus_file = args.legacy_consensus
@@ -262,20 +282,18 @@ Examples:
         if not args.consensus or not args.output:
             parser.error("--consensus and --output are required")
         
-        if not args.pdb_dir and not args.pdb_zip:
-            parser.error("Either --pdb-dir or --pdb-zip must be specified")
-        
         if args.pdb_dir and args.pdb_zip:
             parser.error("Cannot specify both --pdb-dir and --pdb-zip")
         
         consensus_file = args.consensus
         output_dir = args.output
-        pdb_source = args.pdb_zip if args.pdb_zip else args.pdb_dir
         use_zip = bool(args.pdb_zip)
-    
+
+        pdb_source = args.pdb_zip if args.pdb_zip else (args.pdb_dir or "")
+
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Process based on input type
     if use_zip:
         consensus_count, processed_count, missing_count, error_count = process_from_zip(
@@ -286,11 +304,11 @@ Examples:
             print(f"⚠️  {missing_count} PDB files not found in zip", file=sys.stderr)
         if error_count > 0:
             print(f"⚠️  {error_count} errors during processing", file=sys.stderr)
-        
+
         if error_count > 0 or (processed_count == 0 and missing_count > 0):
             sys.exit(1)
     else:
-        consensus_count, processed_count, missing_count = process_from_directory(
+        consensus_count, processed_count, missing_count = process_from_directory_or_paths(
             consensus_file, pdb_source, output_dir
         )
         print(f"✓ Processed {consensus_count} consensus entries, generated {processed_count} domain files")

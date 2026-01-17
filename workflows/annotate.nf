@@ -354,10 +354,11 @@ workflow {
 
     // Chop pdbs in parallel - use appropriate method based on input mode
     if (using_directory) {
-        // Directory mode: read PDBs from directory
+        // Directory mode: read PDBs from directory, using path mapping for sharded dirs
         chopped_pdb_ch = chop_pdb_from_directory(
             consensus_chunks_ch,
-            params.pdb_directory
+            params.pdb_directory,
+            af_ids_ch
         )
     } else {
         // ZIP mode: extract PDBs from ZIP file

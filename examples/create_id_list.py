@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
-Create one or more lists of PDB IDs from a directory or zip file.
+Create one or more lists of PDB IDs or paths from a directory or zip file.
 
 This script generates the uniprot_csv_file (ID list) required by the
-domain annotation pipeline. Despite the name, it's a text file with
-one ID per line (without the .pdb extension).
+domain annotation pipeline. By default, it outputs bare IDs (one per line,
+without the .pdb extension). With --full-paths, it outputs full paths to
+the PDB files, which is useful for sharded directory structures.
 
 Supports:
 - Absolute limits (e.g. --limit 10000)
 - Fractional limits (e.g. --limit 0.2 for 20%)
 - Deterministic group selection (--group-index)
 - Chunking entire datasets into non-overlapping groups (--chunk-all)
+- Full path output for sharded directories (--full-paths)
 
 Usage examples:
-    # Single group (20%, first chunk)
+    # Single group (20%, first chunk) - outputs bare IDs
     python create_id_list.py --input pdb_files/ --output ids.txt --limit 0.2
 
     # Second 20% chunk
@@ -21,6 +23,9 @@ Usage examples:
 
     # Chunk entire directory into multiple files
     python create_id_list.py --input pdb_files/ --output ids.txt --limit 0.2 --chunk-all
+
+    # Output full paths (for sharded directories)
+    python create_id_list.py --input /data/shards/ --output paths.txt --full-paths
 """
 
 import argparse
@@ -35,8 +40,18 @@ from pathlib import Path
 # Input discovery
 # ==============================
 
-def list_pdb_ids_from_directory(directory_path):
-    directory = Path(directory_path)
+def list_pdb_entries_from_directory(directory_path: str, full_paths: bool = False):
+    """
+    List PDB entries from a directory.
+
+    Args:
+        directory_path: Path to directory containing PDB files
+        full_paths: If True, return absolute paths; if False, return bare IDs
+
+    Returns:
+        List of PDB IDs (bare stems) or full paths depending on full_paths flag
+    """
+    directory = Path(directory_path).resolve()
 
     if not directory.exists():
         print(f"ERROR: Directory not found: {directory_path}", file=sys.stderr)
@@ -52,12 +67,28 @@ def list_pdb_ids_from_directory(directory_path):
         print(f"WARNING: No .pdb files found in {directory_path}", file=sys.stderr)
         return []
 
-    ids = [f.stem for f in pdb_files]
-    print(f"Found {len(ids)} PDB IDs in directory", file=sys.stderr)
-    return ids
+    if full_paths:
+        entries = [str(f.resolve()) for f in pdb_files]
+        print(f"Found {len(entries)} PDB files in directory (full paths mode)", file=sys.stderr)
+    else:
+        entries = [f.stem for f in pdb_files]
+        print(f"Found {len(entries)} PDB IDs in directory", file=sys.stderr)
+
+    return entries
 
 
-def list_pdb_ids_from_zip(zip_path):
+def list_pdb_entries_from_zip(zip_path: str, full_paths: bool = False):
+    """
+    List PDB entries from a zip file.
+
+    Args:
+        zip_path: Path to zip file containing PDB files
+        full_paths: If True, return paths within zip; if False, return bare IDs
+                   Note: Full paths within zip are relative to zip root.
+
+    Returns:
+        List of PDB IDs (bare stems) or paths within zip depending on full_paths flag
+    """
     if not os.path.exists(zip_path):
         print(f"ERROR: Zip file not found: {zip_path}", file=sys.stderr)
         sys.exit(1)
@@ -72,13 +103,21 @@ def list_pdb_ids_from_zip(zip_path):
                 print(f"WARNING: No .pdb files found in {zip_path}", file=sys.stderr)
                 return []
 
-            ids = [
+            if full_paths:
+                # For zip files, full paths doesn't make sense externally
+                # Just warn and return IDs
+                print(
+                    "WARNING: --full-paths has no effect for zip files (returning IDs)",
+                    file=sys.stderr
+                )
+
+            entries = [
                 os.path.splitext(os.path.basename(f))[0]
                 for f in pdb_files
             ]
 
-            print(f"Found {len(ids)} PDB IDs in zip file", file=sys.stderr)
-            return ids
+            print(f"Found {len(entries)} PDB IDs in zip file", file=sys.stderr)
+            return entries
 
     except zipfile.BadZipFile:
         print(f"ERROR: Invalid zip file: {zip_path}", file=sys.stderr)
@@ -147,15 +186,17 @@ def make_group_output_path(base_output, group_index):
 # Output
 # ==============================
 
-def write_id_list(ids, output_path):
-    if not ids:
-        print(f"WARNING: No IDs written to {output_path}", file=sys.stderr)
+def write_entry_list(entries, output_path, full_paths=False):
+    """Write entries (IDs or paths) to output file."""
+    if not entries:
+        print(f"WARNING: No entries written to {output_path}", file=sys.stderr)
 
     with open(output_path, "w") as f:
-        for id_ in ids:
-            f.write(f"{id_}\n")
+        for entry in entries:
+            f.write(f"{entry}\n")
 
-    print(f"Wrote {len(ids)} IDs to {output_path}", file=sys.stderr)
+    entry_type = "paths" if full_paths else "IDs"
+    print(f"Wrote {len(entries)} {entry_type} to {output_path}", file=sys.stderr)
 
 
 # ==============================
@@ -164,7 +205,7 @@ def write_id_list(ids, output_path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate deterministic ID lists for domain annotation pipeline",
+        description="Generate deterministic ID or path lists for domain annotation pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -185,8 +226,8 @@ def main():
         type=float,
         default=None,
         help=(
-            "Maximum number of IDs per group. "
-            "If <1, treated as fraction of total (e.g. 0.2 = 20%). "
+            "Maximum number of entries per group. "
+            "If <1, treated as fraction of total (e.g. 0.2 = 20%%). "
             "If >=1, treated as absolute count."
         ),
     )
@@ -202,26 +243,37 @@ def main():
         "--chunk-all",
         action="store_true",
         help=(
-            "Generate ID lists for all groups implied by --limit. "
+            "Generate lists for all groups implied by --limit. "
             "Outputs multiple files with '_group_<i>' appended."
+        ),
+    )
+
+    parser.add_argument(
+        "--full-paths",
+        action="store_true",
+        help=(
+            "Output full absolute paths instead of bare IDs. "
+            "Useful for sharded directory structures where files are not "
+            "in a flat directory. When using this mode, the pipeline's "
+            "pdb_directory argument is ignored during extraction."
         ),
     )
 
     args = parser.parse_args()
 
-    # Load IDs
+    # Load entries (IDs or paths)
     if os.path.isdir(args.input):
         print(f"Reading PDB files from directory: {args.input}", file=sys.stderr)
-        ids = list_pdb_ids_from_directory(args.input)
+        entries = list_pdb_entries_from_directory(args.input, full_paths=args.full_paths)
     elif os.path.isfile(args.input) and args.input.endswith(".zip"):
         print(f"Reading PDB files from zip: {args.input}", file=sys.stderr)
-        ids = list_pdb_ids_from_zip(args.input)
+        entries = list_pdb_entries_from_zip(args.input, full_paths=args.full_paths)
     else:
         print(f"ERROR: Input must be a directory or .zip file: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    if not ids:
-        print("ERROR: No IDs found", file=sys.stderr)
+    if not entries:
+        print("ERROR: No PDB files found", file=sys.stderr)
         sys.exit(1)
 
     # Chunk-all mode
@@ -230,24 +282,25 @@ def main():
             print("ERROR: --chunk-all requires --limit", file=sys.stderr)
             sys.exit(1)
 
-        total = len(ids)
+        total = len(entries)
         num_groups = compute_num_groups(total, args.limit)
 
+        entry_type = "paths" if args.full_paths else "IDs"
         print(
             f"Chunking enabled: {num_groups} groups "
-            f"(total IDs={total}, limit={args.limit})",
+            f"(total {entry_type}={total}, limit={args.limit})",
             file=sys.stderr,
         )
 
         for group_index in range(num_groups):
-            group_ids = apply_limit_and_group(ids, args.limit, group_index)
+            group_entries = apply_limit_and_group(entries, args.limit, group_index)
             output_path = make_group_output_path(args.output, group_index)
-            write_id_list(group_ids, output_path)
+            write_entry_list(group_entries, output_path, full_paths=args.full_paths)
 
     # Single-group mode
     else:
-        group_ids = apply_limit_and_group(ids, args.limit, args.group_index)
-        write_id_list(group_ids, args.output)
+        group_entries = apply_limit_and_group(entries, args.limit, args.group_index)
+        write_entry_list(group_entries, args.output, full_paths=args.full_paths)
 
     print("\nDone.", file=sys.stderr)
 
