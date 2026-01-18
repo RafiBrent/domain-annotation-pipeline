@@ -167,6 +167,35 @@ def extract_base_pdb_id(domain_id: str) -> str:
     return re.sub(r'_\d{2}$', '', domain_id)
 
 
+def build_path_mapping(id_file: str) -> Dict[str, str]:
+    """
+    Build a mapping from ID stem to full path from an ID file.
+
+    If entries are absolute paths, extracts the stem as the key.
+    If entries are bare IDs, the mapping value will be the ID itself.
+
+    Args:
+        id_file: Path to file containing IDs or paths (one per line)
+
+    Returns:
+        Dictionary mapping ID stem to full path
+    """
+    mapping = {}
+    with open(id_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if os.path.isabs(line):
+                # Extract stem from path: /data/shards/00/AF-A.pdb -> AF-A
+                stem = Path(line).stem
+                mapping[stem] = line
+            else:
+                # Bare ID - use as-is
+                mapping[line] = line
+    return mapping
+
+
 def load_md5_lookup(md5_file: str) -> Dict[str, str]:
     """
     Load MD5 lookup table from all_md5.tsv.
@@ -215,18 +244,20 @@ def load_domain_filter(domain_ids_file: str) -> Set[str]:
 def reconstruct_from_directory(transformed_consensus: str, pdb_dir: str,
                                 output_dir: str, md5_lookup: Dict[str, str],
                                 validate: bool, consensus_filter: Optional[str],
-                                domain_filter: Optional[Set[str]]) -> Dict[str, int]:
+                                domain_filter: Optional[Set[str]],
+                                path_mapping: Optional[Dict[str, str]] = None) -> Dict[str, int]:
     """
     Reconstruct chopped PDB files from a directory of PDB structures.
 
     Args:
         transformed_consensus: Path to transformed_consensus.tsv
-        pdb_dir: Directory containing original PDB files
+        pdb_dir: Directory containing original PDB files (fallback if not in path_mapping)
         output_dir: Output directory for reconstructed domains
         md5_lookup: Dictionary mapping filenames to MD5 hashes
         validate: Whether to validate MD5 hashes
         consensus_filter: Optional consensus level filter ('high', 'med', or None)
         domain_filter: Optional set of domain IDs to reconstruct
+        path_mapping: Optional dict mapping ID stem to full path (for sharded dirs)
 
     Returns:
         Dictionary with statistics (processed, missing_pdb, md5_mismatch)
@@ -272,9 +303,14 @@ def reconstruct_from_directory(transformed_consensus: str, pdb_dir: str,
                 stats['skipped_filter'] += 1
                 continue
 
-            # Extract base PDB ID
+            # Extract base PDB ID and find PDB path
             base_pdb_id = extract_base_pdb_id(domain_id)
-            pdb_path = os.path.join(pdb_dir, f"{base_pdb_id}.pdb")
+
+            # Look up path from mapping if available, otherwise construct from pdb_dir
+            if path_mapping and base_pdb_id in path_mapping:
+                pdb_path = path_mapping[base_pdb_id]
+            else:
+                pdb_path = os.path.join(pdb_dir, f"{base_pdb_id}.pdb")
 
             if not os.path.exists(pdb_path):
                 print(f"⚠️  PDB not found: {pdb_path}", file=sys.stderr)
@@ -476,6 +512,14 @@ Examples:
            --output ./selected_domains \\
            --domain-ids domain_list.txt \\
            --validate
+
+  # Reconstruct from sharded directory using ID file with absolute paths
+  # (--pdb-dir not needed when --id-file contains absolute paths)
+  %(prog)s --transformed-consensus results/PROJECT/transformed_consensus.tsv \\
+           --md5-file results/PROJECT/all_md5.tsv \\
+           --id-file paths_with_shards.txt \\
+           --output ./reconstructed_domains \\
+           --validate
         """
     )
 
@@ -484,9 +528,11 @@ Examples:
     parser.add_argument('--md5-file', '-m', required=True,
                         help='Path to all_md5.tsv from workflow output')
     parser.add_argument('--pdb-dir', '-d',
-                        help='Directory containing original PDB files')
+                        help='Directory containing original PDB files (optional if --id-file has absolute paths)')
     parser.add_argument('--pdb-zip', '-z',
                         help='ZIP file containing original PDB files')
+    parser.add_argument('--id-file', '-f',
+                        help='File containing IDs or absolute paths (required for sharded directories)')
     parser.add_argument('--output', '-o', required=True,
                         help='Output directory for reconstructed domain PDB files')
     parser.add_argument('--validate', '-v', action='store_true',
@@ -499,8 +545,8 @@ Examples:
     args = parser.parse_args()
 
     # Validate arguments
-    if not args.pdb_dir and not args.pdb_zip:
-        parser.error("Either --pdb-dir or --pdb-zip must be specified")
+    if not args.pdb_dir and not args.pdb_zip and not args.id_file:
+        parser.error("Either --pdb-dir, --pdb-zip, or --id-file (with absolute paths) must be specified")
 
     if args.pdb_dir and args.pdb_zip:
         parser.error("Cannot specify both --pdb-dir and --pdb-zip")
@@ -511,10 +557,10 @@ Examples:
     if not os.path.exists(args.md5_file):
         parser.error(f"MD5 file not found: {args.md5_file}")
 
-    pdb_source = args.pdb_zip if args.pdb_zip else args.pdb_dir
+    pdb_source = args.pdb_zip if args.pdb_zip else (args.pdb_dir or "")
     use_zip = bool(args.pdb_zip)
 
-    if not os.path.exists(pdb_source):
+    if pdb_source and not os.path.exists(pdb_source):
         parser.error(f"PDB source not found: {pdb_source}")
 
     # Create output directory
@@ -533,6 +579,15 @@ Examples:
         print(f"Loading domain filter from {args.domain_ids}...")
         domain_filter = load_domain_filter(args.domain_ids)
         print(f"✓ Loaded {len(domain_filter)} domain IDs to reconstruct")
+
+    # Load path mapping if specified (for sharded directories)
+    path_mapping = None
+    if args.id_file:
+        if not os.path.exists(args.id_file):
+            parser.error(f"ID file not found: {args.id_file}")
+        print(f"Loading path mapping from {args.id_file}...")
+        path_mapping = build_path_mapping(args.id_file)
+        print(f"✓ Loaded {len(path_mapping)} path mappings")
 
     # Reconstruct domains
     print(f"\nReconstructing domains from {pdb_source}...")
@@ -561,7 +616,8 @@ Examples:
             md5_lookup,
             args.validate,
             args.consensus_level,
-            domain_filter
+            domain_filter,
+            path_mapping
         )
 
     # Print summary
