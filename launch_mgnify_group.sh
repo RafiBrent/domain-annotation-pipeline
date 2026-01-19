@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=mgnify_cath_annotations
 #SBATCH --partition=cpu
-#SBATCH --time=12:00:00
-#SBATCH --mem=16G
+#SBATCH --time=24:00:00
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=/net/scratch/rib7/all_mgnify_domain_results/logs/mgnify_group_%A.log
 #SBATCH --error=/net/scratch/rib7/all_mgnify_domain_results/logs/mgnify_group_%A.log
@@ -10,13 +10,16 @@
 # Usage: sbatch run_group.sh <group_number>
 # Example: sbatch run_group.sh 0
 
+echo "Initial file count: $(df -i /net/scratch/$USER)"
+echo "Initial memory usage: $(df -h /net/scratch/$USER)"
+
 GROUP_NUM=${1:-0}
 REPO_ROOT=/net/scratch/rib7/domain-annotation-pipeline
 FINAL_SAVE_DIR=/net/scratch/rib7/all_mgnify_domain_results
 FOLDSEEK_DIR=/software/foldseek
 
 PROJECT_NAME=full_mgnify_group_${GROUP_NUM}
-ID_FILE=${REPO_ROOT}/examples/full_mgnify_group_${GROUP_NUM}.txt
+ID_FILE=${REPO_ROOT}/examples/full_mgnify_without_unk/full_mgnify_group_${GROUP_NUM}.txt
 
 echo "Starting domain annotation pipeline for group ${GROUP_NUM}"
 echo "Job ID: ${SLURM_JOB_ID}"
@@ -40,6 +43,9 @@ nextflow run ${REPO_ROOT}/workflows/annotate.nf \
 
 cp results/${PROJECT_NAME}/final_domain_annotations.tsv ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_final_domain_annotations.tsv
 echo "Finished domain segmentation at: $(date)"
+
+echo "Peak file count: $(df -i /net/scratch/$USER)"
+echo "Peak memory usage: $(df -h /net/scratch/$USER)"
 
 # Remove workdir to save disk space
 rm -rf work
