@@ -24,6 +24,53 @@ from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Set
 
 
+class ShardManager:
+    """Manages sharding of output files into subdirectories."""
+
+    def __init__(self, output_dir: str, shard_size: Optional[int] = None):
+        """
+        Initialize the shard manager.
+
+        Args:
+            output_dir: Base output directory
+            shard_size: Maximum files per shard (None = no sharding)
+        """
+        self.output_dir = output_dir
+        self.shard_size = shard_size
+        self.file_count = 0
+        self.current_shard = 0
+        self._created_shards: Set[int] = set()
+
+    def get_output_path(self, filename: str) -> str:
+        """
+        Get the output path for a file, creating shard directories as needed.
+
+        Args:
+            filename: The filename to write
+
+        Returns:
+            Full path to write the file
+        """
+        if self.shard_size is None:
+            return os.path.join(self.output_dir, filename)
+
+        # Determine which shard this file belongs to
+        shard_num = self.file_count // self.shard_size
+        shard_dir = os.path.join(self.output_dir, f"shard_{shard_num:04d}")
+
+        # Create shard directory if needed
+        if shard_num not in self._created_shards:
+            os.makedirs(shard_dir, exist_ok=True)
+            self._created_shards.add(shard_num)
+
+        self.file_count += 1
+        return os.path.join(shard_dir, filename)
+
+    def get_shard_count(self) -> int:
+        """Return the number of shards created."""
+        return len(self._created_shards) if self._created_shards else (1 if self.file_count > 0 else 0)
+
+
 def parse_chopping_string(chopping: str) -> List[Tuple[int, int]]:
     """
     Parse chopping string from transformed_consensus.tsv into residue ranges.
@@ -245,7 +292,8 @@ def reconstruct_from_directory(transformed_consensus: str, pdb_dir: str,
                                 output_dir: str, md5_lookup: Dict[str, str],
                                 validate: bool, consensus_filter: Optional[str],
                                 domain_filter: Optional[Set[str]],
-                                path_mapping: Optional[Dict[str, str]] = None) -> Dict[str, int]:
+                                path_mapping: Optional[Dict[str, str]] = None,
+                                shard_size: Optional[int] = None) -> Dict[str, int]:
     """
     Reconstruct chopped PDB files from a directory of PDB structures.
 
@@ -260,15 +308,18 @@ def reconstruct_from_directory(transformed_consensus: str, pdb_dir: str,
         path_mapping: Optional dict mapping ID stem to full path (for sharded dirs)
 
     Returns:
-        Dictionary with statistics (processed, missing_pdb, md5_mismatch)
+        Dictionary with statistics (processed, missing_pdb, md5_mismatch, shard_count)
     """
     stats = {
         'processed': 0,
         'missing_pdb': 0,
         'md5_mismatch': 0,
         'parse_error': 0,
-        'skipped_filter': 0
+        'skipped_filter': 0,
+        'shard_count': 0
     }
+
+    shard_manager = ShardManager(output_dir, shard_size)
 
     with open(transformed_consensus, 'r') as f:
         header = f.readline().strip().split('\t')
@@ -331,8 +382,8 @@ def reconstruct_from_directory(transformed_consensus: str, pdb_dir: str,
                 stats['parse_error'] += 1
                 continue
 
-            # Reconstruct domain
-            output_file = os.path.join(output_dir, f"{domain_id}.pdb")
+            # Reconstruct domain (use shard manager for output path)
+            output_file = shard_manager.get_output_path(f"{domain_id}.pdb")
 
             try:
                 run_pdb_selres(pdb_path, ranges, output_file, is_file=True)
@@ -353,13 +404,15 @@ def reconstruct_from_directory(transformed_consensus: str, pdb_dir: str,
                 stats['parse_error'] += 1
                 continue
 
+    stats['shard_count'] = shard_manager.get_shard_count()
     return stats
 
 
 def reconstruct_from_zip(transformed_consensus: str, pdb_zip: str,
                          output_dir: str, md5_lookup: Dict[str, str],
                          validate: bool, consensus_filter: Optional[str],
-                         domain_filter: Optional[Set[str]]) -> Dict[str, int]:
+                         domain_filter: Optional[Set[str]],
+                         shard_size: Optional[int] = None) -> Dict[str, int]:
     """
     Reconstruct chopped PDB files from a ZIP archive of PDB structures.
 
@@ -373,15 +426,18 @@ def reconstruct_from_zip(transformed_consensus: str, pdb_zip: str,
         domain_filter: Optional set of domain IDs to reconstruct
 
     Returns:
-        Dictionary with statistics (processed, missing_pdb, md5_mismatch)
+        Dictionary with statistics (processed, missing_pdb, md5_mismatch, shard_count)
     """
     stats = {
         'processed': 0,
         'missing_pdb': 0,
         'md5_mismatch': 0,
         'parse_error': 0,
-        'skipped_filter': 0
+        'skipped_filter': 0,
+        'shard_count': 0
     }
+
+    shard_manager = ShardManager(output_dir, shard_size)
 
     with zipfile.ZipFile(pdb_zip, 'r') as zip_ref:
         # Build lookup dictionary for ZIP contents
@@ -451,8 +507,8 @@ def reconstruct_from_zip(transformed_consensus: str, pdb_zip: str,
                     stats['parse_error'] += 1
                     continue
 
-                # Reconstruct domain
-                output_file = os.path.join(output_dir, f"{domain_id}.pdb")
+                # Reconstruct domain (use shard manager for output path)
+                output_file = shard_manager.get_output_path(f"{domain_id}.pdb")
 
                 try:
                     run_pdb_selres(pdb_content, ranges, output_file, is_file=False)
@@ -473,6 +529,7 @@ def reconstruct_from_zip(transformed_consensus: str, pdb_zip: str,
                     stats['parse_error'] += 1
                     continue
 
+    stats['shard_count'] = shard_manager.get_shard_count()
     return stats
 
 
@@ -541,6 +598,8 @@ Examples:
                         help='Filter by consensus level (high or med)')
     parser.add_argument('--domain-ids', '-i',
                         help='File containing domain IDs to reconstruct (one per line)')
+    parser.add_argument('--shard', '-s', type=int,
+                        help='Shard output into subdirectories with at most this many files each')
 
     args = parser.parse_args()
 
@@ -596,6 +655,8 @@ Examples:
         print(f"Filtering by consensus level: {args.consensus_level}")
     if args.validate:
         print(f"MD5 validation: enabled")
+    if args.shard:
+        print(f"Sharding: {args.shard} files per shard")
     print()
 
     if use_zip:
@@ -606,7 +667,8 @@ Examples:
             md5_lookup,
             args.validate,
             args.consensus_level,
-            domain_filter
+            domain_filter,
+            args.shard
         )
     else:
         stats = reconstruct_from_directory(
@@ -617,7 +679,8 @@ Examples:
             args.validate,
             args.consensus_level,
             domain_filter,
-            path_mapping
+            path_mapping,
+            args.shard
         )
 
     # Print summary
@@ -626,6 +689,8 @@ Examples:
     print("RECONSTRUCTION SUMMARY")
     print("=" * 60)
     print(f"✓ Successfully reconstructed: {stats['processed']} domains")
+    if stats.get('shard_count', 0) > 0:
+        print(f"  Output shards:              {stats['shard_count']} directories")
 
     if stats['skipped_filter'] > 0:
         print(f"  Skipped by filter:          {stats['skipped_filter']} domains")
