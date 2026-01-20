@@ -87,12 +87,14 @@ def read_stride_summary(file_path):
         "num_turn",
     ]
 
+    invalid_count = 0
     with open(file_path, "r") as f:
         header = f.readline().strip().split("\t")
         for line in f:
             parts = line.strip().split("\t")
             if len(parts) != len(header):
-                raise ValueError(f"Invalid format in stride file: {file_path}")
+                invalid_count += 1
+                continue
             stride_data = {}
             for key, value in zip(header, parts):
                 if key not in expected_keys:
@@ -102,6 +104,11 @@ def read_stride_summary(file_path):
                 stride_data[key] = value
             stride_id = stride_data.get("id")
             stride_data_by_id[stride_id] = stride_data
+
+    if invalid_count > 0:
+        print(
+            f"WARNING: {invalid_count} invalid lines skipped in stride file: {file_path}"
+        )
 
     if not stride_data_by_id:
         raise ValueError(f"No data found in stride file: {file_path}")
@@ -177,10 +184,18 @@ def transform_consensus(
             num_segments = domain.count("_") + 1
 
             if pdb_filename not in all_stride_data_by_id:
-                raise KeyError(f"Stride summary data not found for ID '{pdb_filename}'")
+                print(
+                    f"WARNING: Stride summary data not found for ID '{pdb_filename}'. "
+                    "This will not be included in the final output."
+                )
+                continue
 
             if pdb_filename not in md5_lookup:
-                raise KeyError(f"MD5 not found for domain '{pdb_filename}'")
+                print(
+                    f"WARNING: MD5 not found for domain '{pdb_filename}'. "
+                    "This will not be included in the final output."
+                )
+                continue
 
             stride_data = all_stride_data_by_id[pdb_filename]
             md5 = md5_lookup[pdb_filename]
