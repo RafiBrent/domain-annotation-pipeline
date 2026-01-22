@@ -1,11 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=mgnify_cath_annotations
 #SBATCH --partition=cpu
-#SBATCH --time=2-00:00:00
+#SBATCH --time=4-00:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=/net/scratch/rib7/all_mgnify_domain_results/logs/mgnify_group_%A.log
 #SBATCH --error=/net/scratch/rib7/all_mgnify_domain_results/logs/mgnify_group_%A.log
+#SBATCH --exclude=c1306
 
 # Usage: sbatch run_group.sh <group_number>
 # Example: sbatch run_group.sh 0
@@ -48,8 +49,8 @@ echo "Peak file count: $(df -i /net/scratch/$USER)"
 echo "Peak memory usage: $(df -h /net/scratch/$USER)"
 
 # Remove workdir to save disk space
-# rm -rf work
-# echo "Cleaned up work directory at: $(date)"
+rm -rf work
+echo "Cleaned up work directory at: $(date)"
 
 # Setup for parallel reconstruction + foldseek processing
 WORKDIR=$(pwd)
@@ -95,6 +96,7 @@ fi
 echo "All chunks processed. Concatenating results at: $(date)"
 
 # Concatenate all parsed_results.tsv files
+cd /net/scratch/$USER/mgnify_domain_segmentation
 RESULT_COUNT=0
 FIRST_FILE=1
 
@@ -102,11 +104,11 @@ find chunks -path '*/output/parsed_results.tsv' | sort |
 while IFS= read -r RESULT_FILE; do
     if [ "$FIRST_FILE" -eq 1 ]; then
         # Include header from first file
-        cat "$RESULT_FILE" > combined_parsed_results.tsv
+        cat "$RESULT_FILE" > group_${GROUP_NUM}_cath_annotations.tsv
         FIRST_FILE=0
     else
         # Skip header (first line) for subsequent files
-        tail -n +2 "$RESULT_FILE" >> combined_parsed_results.tsv
+        tail -n +2 "$RESULT_FILE" >> group_${GROUP_NUM}_cath_annotations.tsv
     fi
     RESULT_COUNT=$((RESULT_COUNT + 1))
 done
@@ -118,14 +120,14 @@ fi
 
 echo "Found ${RESULT_COUNT} result files to concatenate"
 
-FINAL_COUNT=$(($(wc -l < combined_parsed_results.tsv) - 1))
+FINAL_COUNT=$(($(wc -l < group_${GROUP_NUM}_cath_annotations.tsv) - 1))
 echo "Combined results contain ${FINAL_COUNT} annotations"
 
 # Save only the concatenated result to final_save_dir
-cp combined_parsed_results.tsv ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv
+cp group_${GROUP_NUM}_cath_annotations.tsv ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv
 echo "Saved concatenated results to ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv"
 
 # Clean up chunk directories (optional - uncomment to enable)
-# rm -rf chunks
+rm -rf chunks
 
 echo "Full domain segmentation and CATH pipeline completed for group ${GROUP_NUM} at: $(date)"
