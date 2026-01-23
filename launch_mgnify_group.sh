@@ -93,6 +93,7 @@ if [ $ARRAY_EXIT_CODE -ne 0 ]; then
     # Continue anyway to concatenate whatever results we have
 fi
 
+sleep 300 # Wait to ensure all files are written
 echo "All chunks processed. Concatenating results at: $(date)"
 
 # Concatenate all parsed_results.tsv files
@@ -100,32 +101,31 @@ cd /net/scratch/$USER/mgnify_domain_segmentation
 RESULT_COUNT=0
 FIRST_FILE=1
 
-find chunks -path '*/output/parsed_results.tsv' | sort |
 while IFS= read -r RESULT_FILE; do
     if [ "$FIRST_FILE" -eq 1 ]; then
         # Include header from first file
-        cat "$RESULT_FILE" > group_${GROUP_NUM}_cath_annotations.tsv
+        cat "$RESULT_FILE" > "group_${GROUP_NUM}_cath_annotations.tsv"
         FIRST_FILE=0
     else
         # Skip header (first line) for subsequent files
-        tail -n +2 "$RESULT_FILE" >> group_${GROUP_NUM}_cath_annotations.tsv
+        tail -n +2 "$RESULT_FILE" >> "group_${GROUP_NUM}_cath_annotations.tsv"
     fi
     RESULT_COUNT=$((RESULT_COUNT + 1))
-done
+done < <(find chunks -path '*/output/parsed_results.tsv' | sort)
 
 if [ "$RESULT_COUNT" -eq 0 ]; then
-    echo "Error: No parsed_results.tsv files found"
-    exit 1
+    echo "Warning: No parsed_results.tsv files found"
+else
+    echo "Found ${RESULT_COUNT} result files to concatenate"
+
+    FINAL_COUNT=$(($(wc -l < group_${GROUP_NUM}_cath_annotations.tsv) - 1))
+    echo "Combined results contain ${FINAL_COUNT} annotations"
+
+    cp group_${GROUP_NUM}_cath_annotations.tsv \
+       ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv
+    echo "Saved concatenated results to ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv"
 fi
 
-echo "Found ${RESULT_COUNT} result files to concatenate"
-
-FINAL_COUNT=$(($(wc -l < group_${GROUP_NUM}_cath_annotations.tsv) - 1))
-echo "Combined results contain ${FINAL_COUNT} annotations"
-
-# Save only the concatenated result to final_save_dir
-cp group_${GROUP_NUM}_cath_annotations.tsv ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv
-echo "Saved concatenated results to ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv"
 
 # Clean up chunk directories (optional - uncomment to enable)
 rm -rf chunks
