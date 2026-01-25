@@ -124,10 +124,9 @@ else
     cp group_${GROUP_NUM}_cath_annotations.tsv \
        ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv
     echo "Saved concatenated results to ${FINAL_SAVE_DIR}/group_${GROUP_NUM}_cath_annotations.tsv"
+
+    # Clean up chunk directories if results were found
+    rm -rf chunks
 fi
-
-
-# Clean up chunk directories (optional - uncomment to enable)
-rm -rf chunks
 
 echo "Full domain segmentation and CATH pipeline completed for group ${GROUP_NUM} at: $(date)"
