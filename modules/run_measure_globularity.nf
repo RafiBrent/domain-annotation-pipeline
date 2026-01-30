@@ -1,7 +1,7 @@
 process run_measure_globularity {
     label 'sge_low'
     container 'domain-annotation-pipeline-cath-af-cli'
-    publishDir "${params.results_dir}" , mode: 'copy'
+    // publishDir "${params.results_dir}" , mode: 'copy' // unused & written many times in parallel -- can cause race conditions
 
     input:
     tuple val(id), path("pdb/*") //pdb_dir

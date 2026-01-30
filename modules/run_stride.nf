@@ -1,7 +1,7 @@
 process run_stride {
     label 'sge_low'
     container 'domain-annotation-pipeline-cath-af-cli'
-    publishDir "${params.results_dir}" , mode: 'copy', enabled: params.debug // only publish if run in debug mode
+    // publishDir "${params.results_dir}" , mode: 'copy', enabled: params.debug // disabled: written many times in parallel -- can cause race conditions even in debug mode
 
     input:
     tuple val(id), path('*')
