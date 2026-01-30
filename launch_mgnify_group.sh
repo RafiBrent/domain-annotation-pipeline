@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=mgnify_cath_annotations
 #SBATCH --partition=cpu
-#SBATCH --time=4-00:00:00
+#SBATCH --time=7-00:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=1
 #SBATCH --output=/net/scratch/rib7/all_mgnify_domain_results/logs/mgnify_group_%A.log
 #SBATCH --error=/net/scratch/rib7/all_mgnify_domain_results/logs/mgnify_group_%A.log
-#SBATCH --exclude=c1306
+#SBATCH --exclude=c1306,c1127
 
 # Usage: sbatch run_group.sh <group_number>
 # Example: sbatch run_group.sh 0
@@ -57,7 +57,7 @@ WORKDIR=$(pwd)
 CHUNK_SIZE=20000
 
 # Exclude certain nodes
-EXCLUDE_NODES="c1306"
+EXCLUDE_NODES="c1306,c1127"
 mkdir -p chunks logs
 
 # Copy the ID file for workers to access (they need the path mapping)
