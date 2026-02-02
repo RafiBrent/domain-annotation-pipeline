@@ -8,8 +8,6 @@ from atomworks.io.utils.io_utils import load_any, to_pdb_string
 
 def main():
 
-
-
     if len(sys.argv) != 4:
         print(
             "Usage: convert_cif_to_pdb.py "
@@ -61,8 +59,9 @@ def main():
 
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(out_path, "w") as f:
-                f.write(to_pdb_string(aa))
+            if not (aa.res_name == "UNK").any():
+                with open(out_path, "w") as f:
+                    f.write(to_pdb_string(aa))
 
         except Exception as e:
             print(f"[ERROR] {cif_path}: {e}", file=sys.stderr)
