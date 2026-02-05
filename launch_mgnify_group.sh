@@ -20,15 +20,15 @@ FINAL_SAVE_DIR=/net/scratch/rib7/all_mgnify_domain_results
 FOLDSEEK_DIR=/software/foldseek
 
 PROJECT_NAME=full_mgnify_group_${GROUP_NUM}
-ID_FILE=${REPO_ROOT}/examples/full_mgnify_without_unk/full_mgnify_group_${GROUP_NUM}.txt
+ID_FILE=${REPO_ROOT}/examples/full_mgnify_without_unk_december_2025/full_mgnify_december_2025_group_${GROUP_NUM}.txt
 
 echo "Starting domain annotation pipeline for group ${GROUP_NUM}"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Started at: $(date)"
 
 # Setup for domain segmentation
-mkdir -p /net/scratch/$USER/mgnify_domain_segmentation
-cd /net/scratch/$USER/mgnify_domain_segmentation
+mkdir -p /net/scratch/$USER/december_2025_mgnify_domain_segmentation
+cd /net/scratch/$USER/december_2025_mgnify_domain_segmentation
 source ${REPO_ROOT}/.venv/bin/activate
 
 # Run the pipeline
@@ -97,7 +97,7 @@ sleep 300 # Wait to ensure all files are written
 echo "All chunks processed. Concatenating results at: $(date)"
 
 # Concatenate all parsed_results.tsv files
-cd /net/scratch/$USER/mgnify_domain_segmentation
+cd /net/scratch/$USER/december_2025_mgnify_domain_segmentation
 RESULT_COUNT=0
 FIRST_FILE=1
 
