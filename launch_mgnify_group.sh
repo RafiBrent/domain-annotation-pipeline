@@ -38,7 +38,7 @@ nextflow run ${REPO_ROOT}/workflows/annotate.nf \
     --singularity_image_dir ${REPO_ROOT}/apptainer \
     --pdb_directory /squash/mgnify_pdbs \
     --heavy_chunk_size 10000 --light_chunk_size 10000 --chunk_size 10000 \
-    --slurm_queue_gpu gpu-bf --slurm_time_gpu "6h" \
+    --slurm_queue_gpu gpu-bf --slurm_time_gpu "10h" \
     --project_name ${PROJECT_NAME} \
     --uniprot_csv_file ${ID_FILE}
 
