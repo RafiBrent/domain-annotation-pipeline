@@ -143,7 +143,7 @@ def make_output_cif_path(original_path: str, output_base_dir: str, idx_a: int, i
     if stem is None:
         stem = Path(name).stem
 
-    filename = f"{stem}_pair{idx_a}_{idx_b}.cif"
+    filename = f"{stem}_domains_{idx_a}_{idx_b}.cif"
     return Path(output_base_dir) / rel.parent / filename
 
 
@@ -156,18 +156,28 @@ def build_dimer_atomarray(
     The returned array has all atoms from domain a (chain A) followed by all atoms
     from domain b (chain B).
     """
-    out_array = aa.copy()
-
     # Assign chain IDs based on domain membership
-    domain_a_mask = get_domain_atom_mask(out_array, chopping_a)
-    domain_b_mask = get_domain_atom_mask(out_array, chopping_b)
-    out_array.chain_id[domain_a_mask] = "A"
-    out_array.chain_id[domain_b_mask] = "B"
+    domain_a_mask = get_domain_atom_mask(aa, chopping_a)
+    domain_b_mask = get_domain_atom_mask(aa, chopping_b)
 
     # Subset to only the two domains of interest
-    out_array = out_array[domain_a_mask | domain_b_mask]
+    out_array = aa.copy()
+    output_domain_arrays = []
 
-    return out_array
+    # Reindex the res_id (to adhere to CIF conventions)
+    for domain_mask, chain_id in [(domain_a_mask, "A"), (domain_b_mask, "B")]:
+        domain_array = out_array[domain_mask]
+        domain_array.set_annotation("original_res_id", domain_array.res_id.copy())
+        domain_array.chain_id = np.full(domain_array.array_length(), chain_id, dtype=domain_array.chain_id.dtype)
+        res_starts = struc.get_residue_starts(domain_array)
+        new_res_ids_residue_level = np.arange(1, len(res_starts) + 1)
+        new_res_ids = struc.spread_residue_wise(domain_array, new_res_ids_residue_level)
+        domain_array.res_id = new_res_ids
+        output_domain_arrays.append(domain_array)
+    
+    final_output_array = output_domain_arrays[0] + output_domain_arrays[1]
+
+    return final_output_array
 
 
 # ---------------------------------------------------------------------------
