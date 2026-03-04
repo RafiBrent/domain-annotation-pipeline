@@ -147,6 +147,19 @@ def make_output_cif_path(original_path: str, output_base_dir: str, idx_a: int, i
     return Path(output_base_dir) / rel.parent / filename
 
 
+def make_contiguous_symlink(out_cif: Path, output_base: Path) -> None:
+    """Create a symlink to out_cif in the sibling contiguous_<base> directory.
+
+    Used to build a filtered view of dimers where both domains are single
+    contiguous segments (no '_' in their chopping string).
+    """
+    contiguous_base = output_base.parent / f"contiguous_{output_base.name}"
+    rel = out_cif.relative_to(output_base)
+    symlink_path = contiguous_base / rel
+    symlink_path.parent.mkdir(parents=True, exist_ok=True)
+    symlink_path.symlink_to(out_cif.resolve())
+
+
 def build_dimer_atomarray(
     aa: struc.AtomArray, chopping_a: str, chopping_b: str
 ) -> struc.AtomArray:
@@ -265,7 +278,7 @@ def main():
         group = group.reset_index(drop=True)
 
         try:
-            aa = load_any(path_str)
+            aa = load_any(path_str, extra_fields=["b_factor", "occupancy"])
             if isinstance(aa, struc.AtomArrayStack):
                 if aa.stack_depth() == 1:
                     aa = aa[0]
@@ -299,9 +312,19 @@ def main():
                     out_cif = make_output_cif_path(path_str, str(output_base), idx_a, idx_b)
                     out_cif.parent.mkdir(parents=True, exist_ok=True)
                     dimer_aa = build_dimer_atomarray(aa, row_a["chopping"], row_b["chopping"])
-                    to_cif_file(dimer_aa, out_cif)
+                    to_cif_file(dimer_aa, out_cif, extra_fields=["original_res_id"])
                     row["full_structure_path"] = path_str
                     row["path"] = str(out_cif)
+
+                    # Symlink contiguous dimers (single-segment choppings on both sides)
+                    if "_" not in row_a["chopping"] and "_" not in row_b["chopping"]:
+                        try:
+                            make_contiguous_symlink(out_cif, output_base)
+                        except Exception as e:
+                            print(
+                                f"[WARN] Failed to create contiguous symlink for {out_cif}: {e}",
+                                file=sys.stderr,
+                            )
                 except Exception as e:
                     print(
                         f"[ERROR] Failed to save dimer CIF for {path_str} "

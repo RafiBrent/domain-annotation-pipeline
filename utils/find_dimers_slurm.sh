@@ -17,8 +17,8 @@ OUTPUT_FINAL=/net/scratch/rib7/teddimore/teddimore_interfaces_df.parquet
 
 # Optional: set to a directory path to save dimer CIF files to disk.
 # Leave empty to disable file saving.
-OUTPUT_FILE_BASE_DIR=
-# OUTPUT_FILE_BASE_DIR=/net/scratch/rib7/teddimore/dimer_files
+# OUTPUT_FILE_BASE_DIR=
+OUTPUT_FILE_BASE_DIR=/net/scratch/rib7/teddimore/dimer_files
 
 # Pilot mode: restrict to first 1000 rows for testing.
 # When true, submit with: sbatch --array=0-9 find_dimers_slurm.sh
